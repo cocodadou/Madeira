@@ -127,6 +127,14 @@ jobs:
           which llvm-objcopy
           llvm-objcopy --version
 
+          echo "LLVM dlltool:"
+          which llvm-dlltool
+          llvm-dlltool --help >/dev/null
+
+          echo "LLD:"
+          which ld.lld
+          ld.lld --version
+
           echo "AArch64 MinGW compiler:"
           which aarch64-w64-mingw32-clang
           aarch64-w64-mingw32-clang --version
@@ -134,9 +142,6 @@ jobs:
           echo "x86_64 MinGW compiler:"
           which x86_64-w64-mingw32-clang
           x86_64-w64-mingw32-clang --version
-
-          echo "LLVM MinGW bin directory:"
-          ls -la "${TOOLCHAIN_DIR}/bin"
 
       - name: Build Wine macOS tools
         shell: bash
@@ -156,18 +161,17 @@ jobs:
           which bison
           bison --version
 
+          echo "Flex:"
+          which flex
+          flex --version
+
           echo "AArch64 MinGW compiler:"
           which aarch64-w64-mingw32-clang
           aarch64-w64-mingw32-clang --version
 
-          echo "AArch64 MinGW DLL tool:"
-          if command -v aarch64-w64-mingw32-llvm-dlltool >/dev/null 2>&1; then
-            which aarch64-w64-mingw32-llvm-dlltool
-            aarch64-w64-mingw32-llvm-dlltool --version
-          elif command -v llvm-dlltool >/dev/null 2>&1; then
-            which llvm-dlltool
-            llvm-dlltool --version
-          fi
+          echo "LLVM dlltool:"
+          which llvm-dlltool
+          llvm-dlltool --help >/dev/null
 
           echo "LLD:"
           which ld.lld
@@ -183,7 +187,8 @@ jobs:
               --enable-win64 \
               --with-mingw \
               CC=clang \
-              CXX=clang++
+              CXX=clang++ \
+              DLLTOOL=llvm-dlltool
           else
             cd build-macos
           fi
