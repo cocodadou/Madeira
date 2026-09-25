@@ -23,7 +23,10 @@ jobs:
           fetch-depth: 1
 
       - name: Setup Xcode
+        shell: bash
         run: |
+          set -euxo pipefail
+
           sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
           xcodebuild -version
 
@@ -59,15 +62,54 @@ jobs:
           git status --short
           git submodule status --recursive
 
+      - name: Download LLVM MinGW toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          TOOLCHAIN_VERSION="20260421"
+          TOOLCHAIN_NAME="llvm-mingw-${TOOLCHAIN_VERSION}-ucrt-macos-universal"
+          TOOLCHAIN_DIR="${GITHUB_WORKSPACE}/toolchains/${TOOLCHAIN_NAME}"
+          TOOLCHAIN_ARCHIVE="${TOOLCHAIN_NAME}.tar.xz"
+
+          mkdir -p "${GITHUB_WORKSPACE}/toolchains"
+
+          curl \
+            --fail \
+            --location \
+            --retry 5 \
+            --retry-all-errors \
+            --show-error \
+            --output "${GITHUB_WORKSPACE}/toolchains/${TOOLCHAIN_ARCHIVE}" \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/${TOOLCHAIN_VERSION}/${TOOLCHAIN_ARCHIVE}"
+
+          tar \
+            --extract \
+            --xz \
+            --file "${GITHUB_WORKSPACE}/toolchains/${TOOLCHAIN_ARCHIVE}" \
+            --directory "${GITHUB_WORKSPACE}/toolchains"
+
+          rm -f "${GITHUB_WORKSPACE}/toolchains/${TOOLCHAIN_ARCHIVE}"
+
+          test -x "${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-clang"
+          test -x "${TOOLCHAIN_DIR}/bin/aarch64-w64-mingw32-clang"
+
+          echo "x86_64 compiler:"
+          "${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-clang" --version
+
+          echo "aarch64 compiler:"
+          "${TOOLCHAIN_DIR}/bin/aarch64-w64-mingw32-clang" --version
+
+          echo "${TOOLCHAIN_DIR}/bin" >> "$GITHUB_PATH"
+
       - name: Prepare build tools
         shell: bash
         run: |
           set -euxo pipefail
 
-          export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$(brew --prefix llvm)/bin:$PATH"
+          TOOLCHAIN_DIR="${GITHUB_WORKSPACE}/toolchains/llvm-mingw-20260421-ucrt-macos-universal"
 
-          echo "PATH:"
-          echo "$PATH"
+          export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$(brew --prefix llvm)/bin:${TOOLCHAIN_DIR}/bin:$PATH"
 
           echo "Bison:"
           which bison
@@ -85,58 +127,51 @@ jobs:
           which llvm-objcopy
           llvm-objcopy --version
 
-      - name: Download LLVM MinGW toolchain
-        shell: bash
-        run: |
-          set -euxo pipefail
+          echo "AArch64 MinGW compiler:"
+          which aarch64-w64-mingw32-clang
+          aarch64-w64-mingw32-clang --version
 
-          TOOLCHAIN_VERSION="20260421"
-          TOOLCHAIN_NAME="llvm-mingw-${TOOLCHAIN_VERSION}-ucrt-macos-universal"
-          TOOLCHAIN_DIR="toolchains/${TOOLCHAIN_NAME}"
-          TOOLCHAIN_ARCHIVE="${TOOLCHAIN_NAME}.tar.xz"
+          echo "x86_64 MinGW compiler:"
+          which x86_64-w64-mingw32-clang
+          x86_64-w64-mingw32-clang --version
 
-          mkdir -p toolchains
-
-          curl \
-            --fail \
-            --location \
-            --retry 5 \
-            --retry-all-errors \
-            --show-error \
-            --output "toolchains/${TOOLCHAIN_ARCHIVE}" \
-            "https://github.com/mstorsjo/llvm-mingw/releases/download/${TOOLCHAIN_VERSION}/${TOOLCHAIN_ARCHIVE}"
-
-          tar \
-            --extract \
-            --xz \
-            --file "toolchains/${TOOLCHAIN_ARCHIVE}" \
-            --directory toolchains
-
-          rm -f "toolchains/${TOOLCHAIN_ARCHIVE}"
-
-          test -x "${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-clang"
-          test -x "${TOOLCHAIN_DIR}/bin/aarch64-w64-mingw32-clang"
-
-          echo "x86_64 compiler:"
-          "${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-clang" --version
-
-          echo "aarch64 compiler:"
-          "${TOOLCHAIN_DIR}/bin/aarch64-w64-mingw32-clang" --version
+          echo "LLVM MinGW bin directory:"
+          ls -la "${TOOLCHAIN_DIR}/bin"
 
       - name: Build Wine macOS tools
         shell: bash
         run: |
           set -euxo pipefail
 
-          export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$(brew --prefix llvm)/bin:$PATH"
+          TOOLCHAIN_DIR="${GITHUB_WORKSPACE}/toolchains/llvm-mingw-20260421-ucrt-macos-universal"
 
-          echo "Using Bison:"
+          export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$(brew --prefix llvm)/bin:${TOOLCHAIN_DIR}/bin:$PATH"
+
+          export LLVM_MINGW="${TOOLCHAIN_DIR}"
+
+          echo "Build architecture:"
+          uname -m
+
+          echo "Bison:"
           which bison
           bison --version
 
-          echo "Using Flex:"
-          which flex
-          flex --version
+          echo "AArch64 MinGW compiler:"
+          which aarch64-w64-mingw32-clang
+          aarch64-w64-mingw32-clang --version
+
+          echo "AArch64 MinGW DLL tool:"
+          if command -v aarch64-w64-mingw32-llvm-dlltool >/dev/null 2>&1; then
+            which aarch64-w64-mingw32-llvm-dlltool
+            aarch64-w64-mingw32-llvm-dlltool --version
+          elif command -v llvm-dlltool >/dev/null 2>&1; then
+            which llvm-dlltool
+            llvm-dlltool --version
+          fi
+
+          echo "LLD:"
+          which ld.lld
+          ld.lld --version
 
           cd wine
 
