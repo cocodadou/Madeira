@@ -10,330 +10,410 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: madeira-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
-    name: Build Madeira
+    name: Build Madeira iOS
     runs-on: macos-15
 
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "15.0"
+      IOS_DEPLOYMENT_TARGET: "17.0"
+      LLVM_MINGW_VERSION: "20260421"
+      LLVM_MINGW_NAME: "llvm-mingw-20260421-ucrt-macos-universal"
+
     steps:
-      - name: Checkout repository
+      - name: Checkout Madeira
         uses: actions/checkout@v5
         with:
           submodules: recursive
           fetch-depth: 1
 
-      - name: Setup Xcode
+      - name: Select Xcode
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+
+          echo "Xcode:"
           xcodebuild -version
 
-      - name: Install dependencies
+          echo "SDK:"
+          xcrun --sdk iphoneos --show-sdk-path
+
+      - name: Install Homebrew dependencies
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           brew install \
-            cmake \
-            ninja \
-            pkg-config \
-            python@3.13 \
-            meson \
-            nasm \
             autoconf \
             automake \
-            libtool \
             bison \
+            cmake \
             flex \
             gettext \
-            llvm
+            libtool \
+            llvm \
+            meson \
+            nasm \
+            ninja \
+            pkg-config \
+            python@3.13
 
-          echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
-          echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
-          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          BISON_BIN="$(brew --prefix bison)/bin"
+          FLEX_BIN="$(brew --prefix flex)/bin"
+          LLVM_BIN="$(brew --prefix llvm)/bin"
 
-      - name: Show repository state
+          echo "${BISON_BIN}" >> "${GITHUB_PATH}"
+          echo "${FLEX_BIN}" >> "${GITHUB_PATH}"
+          echo "${LLVM_BIN}" >> "${GITHUB_PATH}"
+
+      - name: Cache LLVM MinGW
+        id: llvm-mingw-cache
+        uses: actions/cache@v4
+        with:
+          path: toolchains/${{ env.LLVM_MINGW_NAME }}
+          key: llvm-mingw-${{ env.LLVM_MINGW_VERSION }}-macos-arm64
+
+      - name: Install LLVM MinGW
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
-          git status --short
-          git submodule status --recursive
-
-      - name: Download LLVM MinGW toolchain
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          TOOLCHAIN_VERSION="20260421"
-          TOOLCHAIN_NAME="llvm-mingw-${TOOLCHAIN_VERSION}-ucrt-macos-universal"
-          TOOLCHAIN_DIR="${GITHUB_WORKSPACE}/toolchains/${TOOLCHAIN_NAME}"
-          TOOLCHAIN_ARCHIVE="${TOOLCHAIN_NAME}.tar.xz"
+          TOOLCHAIN_DIR="${GITHUB_WORKSPACE}/toolchains/${LLVM_MINGW_NAME}"
+          TOOLCHAIN_ARCHIVE="${GITHUB_WORKSPACE}/toolchains/${LLVM_MINGW_NAME}.tar.xz"
 
           mkdir -p "${GITHUB_WORKSPACE}/toolchains"
 
-          curl \
-            --fail \
-            --location \
-            --retry 5 \
-            --retry-all-errors \
-            --show-error \
-            --output "${GITHUB_WORKSPACE}/toolchains/${TOOLCHAIN_ARCHIVE}" \
-            "https://github.com/mstorsjo/llvm-mingw/releases/download/${TOOLCHAIN_VERSION}/${TOOLCHAIN_ARCHIVE}"
+          if [ ! -x "${TOOLCHAIN_DIR}/bin/aarch64-w64-mingw32-clang" ]; then
+            curl \
+              --fail \
+              --location \
+              --retry 5 \
+              --retry-all-errors \
+              --show-error \
+              --output "${TOOLCHAIN_ARCHIVE}" \
+              "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/${LLVM_MINGW_NAME}.tar.xz"
 
-          tar \
-            --extract \
-            --xz \
-            --file "${GITHUB_WORKSPACE}/toolchains/${TOOLCHAIN_ARCHIVE}" \
-            --directory "${GITHUB_WORKSPACE}/toolchains"
+            tar \
+              --extract \
+              --xz \
+              --file "${TOOLCHAIN_ARCHIVE}" \
+              --directory "${GITHUB_WORKSPACE}/toolchains"
 
-          rm -f "${GITHUB_WORKSPACE}/toolchains/${TOOLCHAIN_ARCHIVE}"
+            rm -f "${TOOLCHAIN_ARCHIVE}"
+          fi
 
-          test -x "${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-clang"
           test -x "${TOOLCHAIN_DIR}/bin/aarch64-w64-mingw32-clang"
+          test -x "${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-clang"
+          test -x "${TOOLCHAIN_DIR}/bin/ld.lld"
 
-          echo "x86_64 compiler:"
-          "${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-clang" --version
+          echo "${TOOLCHAIN_DIR}/bin" >> "${GITHUB_PATH}"
 
-          echo "aarch64 compiler:"
+      - name: Build environment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TOOLCHAIN_DIR="${GITHUB_WORKSPACE}/toolchains/${LLVM_MINGW_NAME}"
+          BISON_BIN="$(brew --prefix bison)/bin"
+          FLEX_BIN="$(brew --prefix flex)/bin"
+          LLVM_BIN="$(brew --prefix llvm)/bin"
+
+          echo "BISON_BIN=${BISON_BIN}" >> "${GITHUB_ENV}"
+          echo "FLEX_BIN=${FLEX_BIN}" >> "${GITHUB_ENV}"
+          echo "LLVM_BIN=${LLVM_BIN}" >> "${GITHUB_ENV}"
+          echo "LLVM_MINGW=${TOOLCHAIN_DIR}" >> "${GITHUB_ENV}"
+
+          {
+            echo "PATH=${BISON_BIN}:${FLEX_BIN}:${LLVM_BIN}:${TOOLCHAIN_DIR}/bin:${PATH}"
+          } >> "${GITHUB_ENV}"
+
+          echo "Toolchain:"
           "${TOOLCHAIN_DIR}/bin/aarch64-w64-mingw32-clang" --version
+          "${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-clang" --version
+          "${TOOLCHAIN_DIR}/bin/ld.lld" --version
 
-          echo "${TOOLCHAIN_DIR}/bin" >> "$GITHUB_PATH"
+          echo "Native LLVM:"
+          "${LLVM_BIN}/clang" --version
+          "${LLVM_BIN}/llvm-objcopy" --version
+          "${LLVM_BIN}/llvm-ar" --version
 
-      - name: Prepare build tools
+          echo "Autotools:"
+          "${BISON_BIN}/bison" --version
+          "${FLEX_BIN}/flex" --version
+
+      - name: Prepare Wine source tree
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
-          TOOLCHAIN_DIR="${GITHUB_WORKSPACE}/toolchains/llvm-mingw-20260421-ucrt-macos-universal"
+          test -f wine/configure
+          test -f wine/dlls/ntdll/unix/sync.c
 
-          export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$(brew --prefix llvm)/bin:${TOOLCHAIN_DIR}/bin:$PATH"
+          mkdir -p wine/build-macos
 
-          echo "Bison:"
-          which bison
-          bison --version
-
-          echo "Flex:"
-          which flex
-          flex --version
-
-          echo "Clang:"
-          which clang
-          clang --version
-
-          echo "LLVM objcopy:"
-          which llvm-objcopy
-          llvm-objcopy --version
-
-          echo "LLVM dlltool:"
-          which llvm-dlltool
-
-          echo "LLD:"
-          which ld.lld
-          ld.lld --version
-
-          echo "AArch64 MinGW compiler:"
-          which aarch64-w64-mingw32-clang
-          aarch64-w64-mingw32-clang --version
-
-          echo "x86_64 MinGW compiler:"
-          which x86_64-w64-mingw32-clang
-          x86_64-w64-mingw32-clang --version
-
-      - name: Build Wine macOS tools
+      - name: Configure and build Wine macOS host
         shell: bash
+        working-directory: wine
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
-          TOOLCHAIN_DIR="${GITHUB_WORKSPACE}/toolchains/llvm-mingw-20260421-ucrt-macos-universal"
+          REPO_ROOT="${GITHUB_WORKSPACE}"
+          BUILD_DIR="${REPO_ROOT}/wine/build-macos"
+          SHIMS_DIR="${REPO_ROOT}/build/ntdll-unix/shims"
+          TOOLCHAIN_DIR="${REPO_ROOT}/toolchains/${LLVM_MINGW_NAME}"
 
-          export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$(brew --prefix llvm)/bin:${TOOLCHAIN_DIR}/bin:$PATH"
+          export PATH="\
+          ${BISON_BIN}:\
+          ${FLEX_BIN}:\
+          ${LLVM_BIN}:\
+          ${TOOLCHAIN_DIR}/bin:\
+          ${PATH}"
 
-          export LLVM_MINGW="${TOOLCHAIN_DIR}"
+          export CPPFLAGS="-I${SHIMS_DIR}"
 
-          echo "Build architecture:"
-          uname -m
+          cd "${BUILD_DIR}"
 
-          echo "Bison:"
-          which bison
-          bison --version
-
-          echo "Flex:"
-          which flex
-          flex --version
-
-          echo "AArch64 MinGW compiler:"
-          which aarch64-w64-mingw32-clang
-          aarch64-w64-mingw32-clang --version
-
-          echo "LLVM dlltool:"
-          which llvm-dlltool
-
-          echo "LLD:"
-          which ld.lld
-          ld.lld --version
-
-          cd wine
-
-          if [ ! -f build-macos/Makefile ]; then
-            mkdir -p build-macos
-            cd build-macos
-
+          if [ ! -f Makefile ]; then
             ../configure \
               --enable-win64 \
               --with-mingw \
-              CC=clang \
-              CXX=clang++ \
-              DLLTOOL=llvm-dlltool
-          else
-            cd build-macos
+              CC="${LLVM_BIN}/clang" \
+              CXX="${LLVM_BIN}/clang++" \
+              AR="${LLVM_BIN}/llvm-ar" \
+              RANLIB="${LLVM_BIN}/llvm-ranlib" \
+              DLLTOOL="${LLVM_BIN}/llvm-dlltool" \
+              STRIP="${LLVM_BIN}/llvm-strip" \
+              CPPFLAGS="${CPPFLAGS}"
           fi
 
+      - name: Build Wine host binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TOOLCHAIN_DIR="${GITHUB_WORKSPACE}/toolchains/${LLVM_MINGW_NAME}"
+
+          export PATH="\
+          ${BISON_BIN}:\
+          ${FLEX_BIN}:\
+          ${LLVM_BIN}:\
+          ${TOOLCHAIN_DIR}/bin:\
+          ${PATH}"
+
+          cd wine/build-macos
+
           make -j"$(sysctl -n hw.ncpu)" \
+            wine \
+            server/libwineserver.a \
             tools/winebuild/winebuild \
             tools/winegcc/winegcc \
             dlls/d3dcompiler_47/d3dcompiler_47.dll
 
-      - name: Verify Wine build
+      - name: Install Wine base library
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
-          test -x wine/build-macos/tools/winebuild/winebuild
+          mkdir -p app/Madeira
 
-          echo "winebuild:"
-          wine/build-macos/tools/winebuild/winebuild --version || true
+          cp \
+            wine/build-macos/server/libwineserver.a \
+            app/Madeira/libwineserver.a
 
-          echo "Wine build directory:"
-          ls -la wine/build-macos/tools/winebuild
-
-      - name: Build ntdll Unix
+      - name: Prepare generated iOS support
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
+
+          test -d build/ntdll-unix
+          test -d build/ntdll-unix/shims
+          test -f build/ntdll-unix/build.sh
 
           chmod +x build/ntdll-unix/build.sh
+          chmod +x build/wineserver/build.sh
+          chmod +x build/win32u-unix/build.sh
+          chmod +x build/dxmt-ios/build.sh
+          chmod +x build/d3d11-triangle/build.sh
+
+      - name: Build ntdll Unix layer
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export PATH="\
+          ${BISON_BIN}:\
+          ${FLEX_BIN}:\
+          ${LLVM_BIN}:\
+          ${LLVM_MINGW}/bin:\
+          ${PATH}"
+
           ./build/ntdll-unix/build.sh
 
-      - name: Build wineserver
+      - name: Build wineserver iOS layer
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
-          chmod +x build/wineserver/build.sh
+          export PATH="\
+          ${BISON_BIN}:\
+          ${FLEX_BIN}:\
+          ${LLVM_BIN}:\
+          ${LLVM_MINGW}/bin:\
+          ${PATH}"
+
           ./build/wineserver/build.sh
 
-      - name: Build win32u Unix
+      - name: Build win32u Unix layer
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
-          chmod +x build/win32u-unix/build.sh
+          export PATH="\
+          ${BISON_BIN}:\
+          ${FLEX_BIN}:\
+          ${LLVM_BIN}:\
+          ${LLVM_MINGW}/bin:\
+          ${PATH}"
+
           ./build/win32u-unix/build.sh
 
-      - name: Build DXMT
+      - name: Build DXMT iOS layer
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
-          chmod +x build/dxmt-ios/build.sh
+          export PATH="\
+          ${BISON_BIN}:\
+          ${FLEX_BIN}:\
+          ${LLVM_BIN}:\
+          ${LLVM_MINGW}/bin:\
+          ${PATH}"
+
           ./build/dxmt-ios/build.sh
 
-      - name: Build D3D11 triangle
+      - name: Build D3D11 triangle assets
         shell: bash
         env:
           WINE: ${{ github.workspace }}/wine/build-macos/wine
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
-          chmod +x build/d3d11-triangle/build.sh
+          export PATH="\
+          ${BISON_BIN}:\
+          ${FLEX_BIN}:\
+          ${LLVM_BIN}:\
+          ${LLVM_MINGW}/bin:\
+          ${PATH}"
 
-          if [ ! -x "$WINE" ]; then
-            echo "Expected Wine executable was not found:"
-            echo "$WINE"
-            exit 1
-          fi
-
-          "$WINE" --version
+          test -x "${WINE}"
+          test -x "${GITHUB_WORKSPACE}/wine/build-macos/tools/winebuild/winebuild"
+          test -f "${GITHUB_WORKSPACE}/wine/build-macos/dlls/d3dcompiler_47/d3dcompiler_47.dll"
 
           ./build/d3d11-triangle/build.sh
 
-      - name: Find Xcode project
+      - name: Prepare Xcode build
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
-          echo "Xcode projects found:"
+          mkdir -p build/DerivedData
 
-          find . \
-            -maxdepth 4 \
-            -name "*.xcodeproj" \
-            -print
+          if [ -f app/Madeira.xcodeproj/project.pbxproj ]; then
+            echo "Using app/Madeira.xcodeproj"
+          else
+            PROJECT="$(find app -maxdepth 2 -name "*.xcodeproj" -print -quit)"
+
+            if [ -z "${PROJECT}" ]; then
+              echo "No Madeira Xcode project found."
+              exit 1
+            fi
+
+            echo "Using ${PROJECT}"
+          fi
 
       - name: Build Madeira
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
-          PROJECT="$(find . -maxdepth 4 -name "*.xcodeproj" -print -quit)"
+          PROJECT="app/Madeira.xcodeproj"
 
-          if [ -z "$PROJECT" ]; then
-            echo "No Xcode project found."
+          if [ ! -d "${PROJECT}" ]; then
+            PROJECT="$(find app -maxdepth 2 -name "*.xcodeproj" -print -quit)"
+          fi
+
+          if [ -z "${PROJECT}" ]; then
+            echo "No Madeira Xcode project found."
             exit 1
           fi
 
-          echo "Using project: $PROJECT"
-
           xcodebuild \
-            -project "$PROJECT" \
+            -project "${PROJECT}" \
             -configuration Release \
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
+            -derivedDataPath "${GITHUB_WORKSPACE}/build/DerivedData" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             build
 
-      - name: Locate application
-        id: find-app
+      - name: Locate Madeira.app
+        id: app
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           APP_PATH="$(
-            find "$HOME/Library/Developer/Xcode/DerivedData" \
+            find "${GITHUB_WORKSPACE}/build/DerivedData" \
               -type d \
               -path "*/Build/Products/Release-iphoneos/*.app" \
               -print \
               -quit
           )"
 
-          if [ -z "$APP_PATH" ]; then
-            echo "Could not find the built .app bundle."
+          if [ -z "${APP_PATH}" ]; then
+            APP_PATH="$(
+              find "${GITHUB_WORKSPACE}/app" \
+                -type d \
+                -path "*/Build/Products/Release-iphoneos/*.app" \
+                -print \
+                -quit
+            )"
+          fi
+
+          if [ -z "${APP_PATH}" ]; then
+            echo "Madeira.app was not produced."
             exit 1
           fi
 
-          echo "Found application: $APP_PATH"
-          echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
+          echo "app_path=${APP_PATH}" >> "${GITHUB_OUTPUT}"
 
-      - name: Package application
+      - name: Create unsigned IPA
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
-          mkdir -p artifacts
+          rm -rf artifacts
+          mkdir -p artifacts/Payload
 
           cp -R \
-            "${{ steps.find-app.outputs.app_path }}" \
-            artifacts/Madeira.app
+            "${{ steps.app.outputs.app_path }}" \
+            artifacts/Payload/Madeira.app
 
           cd artifacts
-          zip -r Madeira-ios.zip Madeira.app
+          zip -qry Madeira-unsigned.ipa Payload
 
-      - name: Upload application
+      - name: Upload IPA
         uses: actions/upload-artifact@v6
         with:
           name: Madeira-iOS
-          path: artifacts/Madeira-ios.zip
+          path: artifacts/Madeira-unsigned.ipa
           if-no-files-found: error
+          retention-days: 7
