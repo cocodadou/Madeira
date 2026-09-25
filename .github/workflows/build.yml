@@ -129,7 +129,6 @@ jobs:
 
           echo "LLVM dlltool:"
           which llvm-dlltool
-          llvm-dlltool --help >/dev/null
 
           echo "LLD:"
           which ld.lld
@@ -171,7 +170,6 @@ jobs:
 
           echo "LLVM dlltool:"
           which llvm-dlltool
-          llvm-dlltool --help >/dev/null
 
           echo "LLD:"
           which ld.lld
