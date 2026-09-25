@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           submodules: recursive
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Setup Xcode
         run: |
@@ -29,7 +29,6 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew update
           brew install \
             cmake \
             ninja \
@@ -42,12 +41,8 @@ jobs:
             libtool \
             bison \
             flex \
-            gettext
-
-      - name: Initialize submodules
-        run: |
-          git submodule sync --recursive
-          git submodule update --init --recursive
+            gettext \
+            llvm
 
       - name: Show repository state
         run: |
@@ -86,96 +81,117 @@ jobs:
           test -x "${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-clang"
           test -x "${TOOLCHAIN_DIR}/bin/aarch64-w64-mingw32-clang"
 
-          echo "x86_64 compiler:"
           "${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-clang" --version
-
-          echo "aarch64 compiler:"
           "${TOOLCHAIN_DIR}/bin/aarch64-w64-mingw32-clang" --version
 
-      - name: Check Wine
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if command -v wine >/dev/null 2>&1; then
-            WINE_PATH="$(command -v wine)"
-            echo "Wine found at: ${WINE_PATH}"
-            wine --version
-            exit 0
-          fi
-
-          if [ -x "/opt/homebrew/bin/wine" ]; then
-            echo "Wine found at /opt/homebrew/bin/wine"
-            /opt/homebrew/bin/wine --version
-            exit 0
-          fi
-
-          if [ -x "/usr/local/bin/wine" ]; then
-            echo "Wine found at /usr/local/bin/wine"
-            /usr/local/bin/wine --version
-            exit 0
-          fi
-
-          echo "Wine is not installed."
-          exit 1
-
-      - name: Verify build environment
+      - name: Prepare LLVM tools
         shell: bash
         run: |
           set -euxo pipefail
 
-          echo "macOS:"
-          sw_vers
+          LLVM_PREFIX="$(brew --prefix llvm)"
 
-          echo "Architecture:"
-          uname -m
+          echo "${LLVM_PREFIX}/bin" >> "$GITHUB_PATH"
 
-          echo "Xcode:"
-          xcodebuild -version
+          export PATH="${LLVM_PREFIX}/bin:$PATH"
 
-          echo "CMake:"
-          cmake --version
+          clang --version
+          llvm-objcopy --version
 
-          echo "Ninja:"
-          ninja --version
-
-          echo "LLVM MinGW:"
-          toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin/x86_64-w64-mingw32-clang --version
-
-          echo "Wine:"
-          wine --version
-
-      - name: Make build scripts executable
-        shell: bash
-        run: |
-          set -euxo pipefail
-          chmod +x build/*/build.sh
-
-      - name: Build native components
+      - name: Build Wine macOS tools
         shell: bash
         run: |
           set -euxo pipefail
 
-          for script in build/*/build.sh; do
-            if [ -f "$script" ]; then
-              echo "::group::Building $script"
+          cd wine
 
-              (
-                cd "$(dirname "$script")"
-                ./build.sh
-              )
+          if [ ! -f build-macos/Makefile ]; then
+            mkdir -p build-macos
+            cd build-macos
 
-              echo "::endgroup::"
-            fi
-          done
+            ../configure \
+              --enable-win64 \
+              --with-mingw \
+              CC=clang \
+              CXX=clang++
+          else
+            cd build-macos
+          fi
+
+          make -j"$(sysctl -n hw.ncpu)" \
+            tools/winebuild/winebuild \
+            tools/winegcc/winegcc \
+            dlls/d3dcompiler_47/d3dcompiler_47.dll
+
+      - name: Verify Wine build
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          test -x wine/build-macos/tools/winebuild/winebuild
+
+          echo "winebuild:"
+          wine/build-macos/tools/winebuild/winebuild --version || true
+
+          echo "Wine build directory:"
+          ls -la wine/build-macos/tools/winebuild
+
+      - name: Build ntdll Unix
+        shell: bash
+        run: |
+          set -euxo pipefail
+          chmod +x build/ntdll-unix/build.sh
+          ./build/ntdll-unix/build.sh
+
+      - name: Build wineserver
+        shell: bash
+        run: |
+          set -euxo pipefail
+          chmod +x build/wineserver/build.sh
+          ./build/wineserver/build.sh
+
+      - name: Build win32u Unix
+        shell: bash
+        run: |
+          set -euxo pipefail
+          chmod +x build/win32u-unix/build.sh
+          ./build/win32u-unix/build.sh
+
+      - name: Build DXMT
+        shell: bash
+        run: |
+          set -euxo pipefail
+          chmod +x build/dxmt-ios/build.sh
+          ./build/dxmt-ios/build.sh
+
+      - name: Build D3D11 triangle
+        shell: bash
+        env:
+          WINE: ${{ github.workspace }}/wine/build-macos/wine
+        run: |
+          set -euxo pipefail
+
+          chmod +x build/d3d11-triangle/build.sh
+
+          if [ ! -x "$WINE" ]; then
+            echo "Expected Wine executable was not found:"
+            echo "$WINE"
+            exit 1
+          fi
+
+          "$WINE" --version
+
+          ./build/d3d11-triangle/build.sh
 
       - name: Find Xcode project
         shell: bash
         run: |
           set -euxo pipefail
 
-          echo "Xcode projects found:"
-          find . -maxdepth 4 -name "*.xcodeproj" -print
+          find . \
+            -maxdepth 4 \
+            -name "*.xcodeproj" \
+            -print
 
       - name: Build Madeira
         shell: bash
