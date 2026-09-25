@@ -1,235 +1,272 @@
 name: Build Madeira
 
 on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
-  pull_request:
+workflow_dispatch:
+push:
+branches:
+- main
+pull_request:
 
 permissions:
-  contents: read
+contents: read
 
 jobs:
-  build:
-    name: Build Madeira
-    runs-on: macos-15
+build:
+name: Build Madeira
+runs-on: macos-15
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-        with:
-          submodules: recursive
-          fetch-depth: 0
+```
+steps:
+  - name: Checkout repository
+    uses: actions/checkout@v5
+    with:
+      submodules: recursive
+      fetch-depth: 0
 
-      - name: Setup Xcode
-        run: |
-          sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
-          xcodebuild -version
-          xcode-select -p
+  - name: Setup Xcode
+    run: |
+      sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+      xcodebuild -version
+      xcode-select -p
 
-      - name: Install dependencies
-        run: |
-          brew update
+  - name: Install dependencies
+    run: |
+      brew update
 
-          brew install \
-            cmake \
-            ninja \
-            pkg-config \
-            python@3.13 \
-            meson \
-            nasm \
-            autoconf \
-            automake \
-            libtool
+      brew install \
+        cmake \
+        ninja \
+        pkg-config \
+        python@3.13 \
+        meson \
+        nasm \
+        autoconf \
+        automake \
+        libtool \
+        bison \
+        flex \
+        gettext
 
-      - name: Initialize submodules
-        run: |
-          git submodule sync --recursive
-          git submodule update --init --recursive
+  - name: Initialize submodules
+    run: |
+      git submodule sync --recursive
+      git submodule update --init --recursive
 
-      - name: Show repository state
-        run: |
-          git status --short
-          git submodule status --recursive
+  - name: Show repository state
+    run: |
+      git status --short
+      git submodule status --recursive
 
-      - name: Download LLVM MinGW toolchain
-        shell: bash
-        run: |
-          set -euxo pipefail
+  - name: Download LLVM MinGW toolchain
+    shell: bash
+    run: |
+      set -euxo pipefail
 
-          TOOLCHAIN_VERSION="20260421"
-          TOOLCHAIN_NAME="llvm-mingw-${TOOLCHAIN_VERSION}-ucrt-macos-universal"
-          TOOLCHAIN_DIR="toolchains/${TOOLCHAIN_NAME}"
-          TOOLCHAIN_ARCHIVE="${TOOLCHAIN_NAME}.tar.xz"
+      TOOLCHAIN_VERSION="20260421"
+      TOOLCHAIN_NAME="llvm-mingw-${TOOLCHAIN_VERSION}-ucrt-macos-universal"
+      TOOLCHAIN_DIR="toolchains/${TOOLCHAIN_NAME}"
+      TOOLCHAIN_ARCHIVE="${TOOLCHAIN_NAME}.tar.xz"
 
-          mkdir -p toolchains
+      mkdir -p toolchains
 
-          echo "Downloading LLVM MinGW ${TOOLCHAIN_VERSION}..."
+      echo "Downloading LLVM MinGW ${TOOLCHAIN_VERSION}..."
 
-          curl \
-            --fail \
-            --location \
-            --retry 5 \
-            --retry-all-errors \
-            --show-error \
-            --output "toolchains/${TOOLCHAIN_ARCHIVE}" \
-            "https://github.com/mstorsjo/llvm-mingw/releases/download/${TOOLCHAIN_VERSION}/${TOOLCHAIN_ARCHIVE}"
+      curl \
+        --fail \
+        --location \
+        --retry 5 \
+        --retry-all-errors \
+        --show-error \
+        --output "toolchains/${TOOLCHAIN_ARCHIVE}" \
+        "https://github.com/mstorsjo/llvm-mingw/releases/download/${TOOLCHAIN_VERSION}/${TOOLCHAIN_ARCHIVE}"
 
-          echo "Extracting LLVM MinGW..."
+      echo "Extracting LLVM MinGW..."
 
-          tar \
-            --extract \
-            --xz \
-            --file "toolchains/${TOOLCHAIN_ARCHIVE}" \
-            --directory toolchains
+      tar \
+        --extract \
+        --xz \
+        --file "toolchains/${TOOLCHAIN_ARCHIVE}" \
+        --directory toolchains
 
-          rm -f "toolchains/${TOOLCHAIN_ARCHIVE}"
+      rm -f "toolchains/${TOOLCHAIN_ARCHIVE}"
 
-          echo "Verifying LLVM MinGW..."
+      test -x \
+        "${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-clang"
 
-          test -x "${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-clang"
-          test -x "${TOOLCHAIN_DIR}/bin/aarch64-w64-mingw32-clang"
+      test -x \
+        "${TOOLCHAIN_DIR}/bin/aarch64-w64-mingw32-clang"
 
-          echo "x86_64 compiler:"
-          "${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-clang" --version
+      echo "x86_64 compiler:"
+      "${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-clang" --version
 
-          echo "aarch64 compiler:"
-          "${TOOLCHAIN_DIR}/bin/aarch64-w64-mingw32-clang" --version
+      echo "aarch64 compiler:"
+      "${TOOLCHAIN_DIR}/bin/aarch64-w64-mingw32-clang" --version
 
-      - name: Install Wine
-        run: |
-          brew install --cask wine-stable || brew install wine
+  - name: Check Wine
+    shell: bash
+    run: |
+      set -euo pipefail
 
-      - name: Verify build environment
-        shell: bash
-        run: |
-          set -euxo pipefail
+      if command -v wine >/dev/null 2>&1; then
+        echo "Wine found:"
+        command -v wine
+        wine --version
+        exit 0
+      fi
 
-          echo "macOS:"
-          sw_vers
+      if [ -x "/opt/homebrew/bin/wine" ]; then
+        echo "Wine found at /opt/homebrew/bin/wine"
+        /opt/homebrew/bin/wine --version
+        exit 0
+      fi
 
-          echo "Architecture:"
-          uname -m
+      if [ -x "/usr/local/bin/wine" ]; then
+        echo "Wine found at /usr/local/bin/wine"
+        /usr/local/bin/wine --version
+        exit 0
+      fi
 
-          echo "Xcode:"
-          xcodebuild -version
+      echo "Wine is not available on this runner."
+      echo "The Homebrew Wine casks are currently unavailable."
+      exit 1
 
-          echo "CMake:"
-          cmake --version
+  - name: Verify build environment
+    shell: bash
+    run: |
+      set -euxo pipefail
 
-          echo "Ninja:"
-          ninja --version
+      echo "macOS:"
+      sw_vers
 
-          echo "LLVM MinGW:"
-          test -x \
-            "toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin/x86_64-w64-mingw32-clang"
+      echo "Architecture:"
+      uname -m
 
-          test -x \
-            "toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin/aarch64-w64-mingw32-clang"
+      echo "Xcode:"
+      xcodebuild -version
 
-      - name: Make build scripts executable
-        shell: bash
-        run: |
-          chmod +x build/*/build.sh
+      echo "CMake:"
+      cmake --version
 
-      - name: Build native components
-        shell: bash
-        run: |
-          set -euxo pipefail
+      echo "Ninja:"
+      ninja --version
 
-          for script in build/*/build.sh; do
-            if [ -f "$script" ]; then
-              echo "::group::Building $script"
+      echo "LLVM MinGW:"
+      toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin/x86_64-w64-mingw32-clang --version
 
-              (
-                cd "$(dirname "$script")"
-                ./build.sh
-              )
+      echo "Wine:"
+      wine --version
 
-              echo "::endgroup::"
-            fi
-          done
+  - name: Make build scripts executable
+    shell: bash
+    run: |
+      set -euxo pipefail
+      chmod +x build/*/build.sh
 
-      - name: Find Xcode project
-        shell: bash
-        run: |
-          set -euxo pipefail
+  - name: Build native components
+    shell: bash
+    run: |
+      set -euxo pipefail
 
-          echo "Xcode projects found:"
-          find . \
-            -maxdepth 3 \
-            \( -name "*.xcodeproj" -o -name "*.xcworkspace" \) \
-            -print
+      for script in build/*/build.sh; do
+        if [ -f "$script" ]; then
+          echo "::group::Building $script"
 
-      - name: Build Madeira
-        shell: bash
-        run: |
-          set -euxo pipefail
+          (
+            cd "$(dirname "$script")"
+            ./build.sh
+          )
 
-          PROJECT="$(find . -maxdepth 3 -name "*.xcodeproj" -print -quit)"
+          echo "::endgroup::"
+        fi
+      done
 
-          if [ -z "$PROJECT" ]; then
-            echo "No Xcode project found."
-            exit 1
-          fi
+  - name: Find Xcode project
+    shell: bash
+    run: |
+      set -euxo pipefail
 
-          echo "Using project: $PROJECT"
+      echo "Xcode projects found:"
 
-          xcodebuild \
-            -project "$PROJECT" \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination "generic/platform=iOS" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            build
+      find . \
+        -maxdepth 4 \
+        -name "*.xcodeproj" \
+        -print
 
-      - name: Locate Madeira.app
-        id: find-app
-        shell: bash
-        run: |
-          set -euxo pipefail
+  - name: Build Madeira
+    shell: bash
+    run: |
+      set -euxo pipefail
 
-          APP_PATH="$(
-            find "$HOME/Library/Developer/Xcode/DerivedData" \
-              -type d \
-              -path "*/Build/Products/Release-iphoneos/*.app" \
-              -print \
-              -quit
-          )"
+      PROJECT="$(
+        find . \
+          -maxdepth 4 \
+          -name "*.xcodeproj" \
+          -print \
+          -quit
+      )"
 
-          if [ -z "$APP_PATH" ]; then
-            echo "Could not find the built .app bundle."
-            exit 1
-          fi
+      if [ -z "$PROJECT" ]; then
+        echo "No Xcode project found."
+        exit 1
+      fi
 
-          echo "Found application:"
-          echo "$APP_PATH"
+      echo "Using project: $PROJECT"
 
-          echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
+      xcodebuild \
+        -project "$PROJECT" \
+        -configuration Release \
+        -sdk iphoneos \
+        -destination "generic/platform=iOS" \
+        CODE_SIGNING_ALLOWED=NO \
+        CODE_SIGNING_REQUIRED=NO \
+        build
 
-      - name: Package application
-        shell: bash
-        run: |
-          set -euxo pipefail
+  - name: Locate application
+    id: find-app
+    shell: bash
+    run: |
+      set -euxo pipefail
 
-          mkdir -p artifacts
+      APP_PATH="$(
+        find "$HOME/Library/Developer/Xcode/DerivedData" \
+          -type d \
+          -path "*/Build/Products/Release-iphoneos/*.app" \
+          -print \
+          -quit
+      )"
 
-          cp -R \
-            "${{ steps.find-app.outputs.app_path }}" \
-            "artifacts/Madeira.app"
+      if [ -z "$APP_PATH" ]; then
+        echo "Could not find the built .app bundle."
+        exit 1
+      fi
 
-          cd artifacts
+      echo "Found application:"
+      echo "$APP_PATH"
 
-          zip \
-            -r \
-            "Madeira-ios.zip" \
-            "Madeira.app"
+      echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
 
-      - name: Upload application
-        uses: actions/upload-artifact@v6
-        with:
-          name: Madeira-iOS
-          path: artifacts/Madeira-ios.zip
-          if-no-files-found: error
+  - name: Package application
+    shell: bash
+    run: |
+      set -euxo pipefail
+
+      mkdir -p artifacts
+
+      cp -R \
+        "${{ steps.find-app.outputs.app_path }}" \
+        "artifacts/Madeira.app"
+
+      cd artifacts
+
+      zip \
+        -r \
+        "Madeira-ios.zip" \
+        "Madeira.app"
+
+  - name: Upload application
+    uses: actions/upload-artifact@v6
+    with:
+      name: Madeira-iOS
+      path: artifacts/Madeira-ios.zip
+      if-no-files-found: error
+```
