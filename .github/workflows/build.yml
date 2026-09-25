@@ -28,7 +28,10 @@ jobs:
           xcodebuild -version
 
       - name: Install dependencies
+        shell: bash
         run: |
+          set -euxo pipefail
+
           brew install \
             cmake \
             ninja \
@@ -44,10 +47,43 @@ jobs:
             gettext \
             llvm
 
+          echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+
       - name: Show repository state
+        shell: bash
         run: |
+          set -euxo pipefail
+
           git status --short
           git submodule status --recursive
+
+      - name: Prepare build tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$(brew --prefix llvm)/bin:$PATH"
+
+          echo "PATH:"
+          echo "$PATH"
+
+          echo "Bison:"
+          which bison
+          bison --version
+
+          echo "Flex:"
+          which flex
+          flex --version
+
+          echo "Clang:"
+          which clang
+          clang --version
+
+          echo "LLVM objcopy:"
+          which llvm-objcopy
+          llvm-objcopy --version
 
       - name: Download LLVM MinGW toolchain
         shell: bash
@@ -81,27 +117,26 @@ jobs:
           test -x "${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-clang"
           test -x "${TOOLCHAIN_DIR}/bin/aarch64-w64-mingw32-clang"
 
+          echo "x86_64 compiler:"
           "${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-clang" --version
+
+          echo "aarch64 compiler:"
           "${TOOLCHAIN_DIR}/bin/aarch64-w64-mingw32-clang" --version
-
-      - name: Prepare LLVM tools
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          LLVM_PREFIX="$(brew --prefix llvm)"
-
-          echo "${LLVM_PREFIX}/bin" >> "$GITHUB_PATH"
-
-          export PATH="${LLVM_PREFIX}/bin:$PATH"
-
-          clang --version
-          llvm-objcopy --version
 
       - name: Build Wine macOS tools
         shell: bash
         run: |
           set -euxo pipefail
+
+          export PATH="$(brew --prefix bison)/bin:$(brew --prefix flex)/bin:$(brew --prefix llvm)/bin:$PATH"
+
+          echo "Using Bison:"
+          which bison
+          bison --version
+
+          echo "Using Flex:"
+          which flex
+          flex --version
 
           cd wine
 
@@ -140,6 +175,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+
           chmod +x build/ntdll-unix/build.sh
           ./build/ntdll-unix/build.sh
 
@@ -147,6 +183,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+
           chmod +x build/wineserver/build.sh
           ./build/wineserver/build.sh
 
@@ -154,6 +191,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+
           chmod +x build/win32u-unix/build.sh
           ./build/win32u-unix/build.sh
 
@@ -161,6 +199,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+
           chmod +x build/dxmt-ios/build.sh
           ./build/dxmt-ios/build.sh
 
@@ -187,6 +226,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+
+          echo "Xcode projects found:"
 
           find . \
             -maxdepth 4 \
