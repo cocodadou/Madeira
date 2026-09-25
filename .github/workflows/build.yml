@@ -1,11 +1,11 @@
 name: Build Madeira
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
   pull_request:
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -15,9 +15,6 @@ jobs:
     name: Build Madeira
     runs-on: macos-15
 
-    env:
-      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -25,13 +22,13 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Select Xcode
+      - name: Setup Xcode
         run: |
-          sudo xcode-select --switch "$DEVELOPER_DIR"
+          sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
           xcodebuild -version
           xcode-select -p
 
-      - name: Install build dependencies
+      - name: Install dependencies
         run: |
           brew update
 
@@ -44,15 +41,10 @@ jobs:
             nasm \
             autoconf \
             automake \
-            libtool \
-            bison \
-            flex \
-            gettext \
-            gnu-sed
+            libtool
 
-      - name: Configure git
+      - name: Initialize submodules
         run: |
-          git config --global protocol.version 2
           git submodule sync --recursive
           git submodule update --init --recursive
 
@@ -61,9 +53,85 @@ jobs:
           git status --short
           git submodule status --recursive
 
-      - name: Make build scripts executable
+      - name: Download LLVM MinGW toolchain
+        shell: bash
         run: |
-          find build -type f -name "*.sh" -exec chmod +x {} \;
+          set -euxo pipefail
+
+          TOOLCHAIN_VERSION="20260421"
+          TOOLCHAIN_NAME="llvm-mingw-${TOOLCHAIN_VERSION}-ucrt-macos-universal"
+          TOOLCHAIN_DIR="toolchains/${TOOLCHAIN_NAME}"
+          TOOLCHAIN_ARCHIVE="${TOOLCHAIN_NAME}.tar.xz"
+
+          mkdir -p toolchains
+
+          echo "Downloading LLVM MinGW ${TOOLCHAIN_VERSION}..."
+
+          curl \
+            --fail \
+            --location \
+            --retry 5 \
+            --retry-all-errors \
+            --show-error \
+            --output "toolchains/${TOOLCHAIN_ARCHIVE}" \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/${TOOLCHAIN_VERSION}/${TOOLCHAIN_ARCHIVE}"
+
+          echo "Extracting LLVM MinGW..."
+
+          tar \
+            --extract \
+            --xz \
+            --file "toolchains/${TOOLCHAIN_ARCHIVE}" \
+            --directory toolchains
+
+          rm -f "toolchains/${TOOLCHAIN_ARCHIVE}"
+
+          echo "Verifying LLVM MinGW..."
+
+          test -x "${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-clang"
+          test -x "${TOOLCHAIN_DIR}/bin/aarch64-w64-mingw32-clang"
+
+          echo "x86_64 compiler:"
+          "${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-clang" --version
+
+          echo "aarch64 compiler:"
+          "${TOOLCHAIN_DIR}/bin/aarch64-w64-mingw32-clang" --version
+
+      - name: Install Wine
+        run: |
+          brew install --cask wine-stable || brew install wine
+
+      - name: Verify build environment
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          echo "macOS:"
+          sw_vers
+
+          echo "Architecture:"
+          uname -m
+
+          echo "Xcode:"
+          xcodebuild -version
+
+          echo "CMake:"
+          cmake --version
+
+          echo "Ninja:"
+          ninja --version
+
+          echo "LLVM MinGW:"
+          test -x \
+            "toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin/x86_64-w64-mingw32-clang"
+
+          test -x \
+            "toolchains/llvm-mingw-20260421-ucrt-macos-universal/bin/aarch64-w64-mingw32-clang"
+
+      - name: Make build scripts executable
+        shell: bash
+        run: |
+          chmod +x build/*/build.sh
 
       - name: Build native components
         shell: bash
@@ -72,67 +140,96 @@ jobs:
 
           for script in build/*/build.sh; do
             if [ -f "$script" ]; then
-              echo "========================================"
-              echo "Building: $script"
-              echo "========================================"
+              echo "::group::Building $script"
 
               (
                 cd "$(dirname "$script")"
                 ./build.sh
               )
+
+              echo "::endgroup::"
             fi
           done
+
+      - name: Find Xcode project
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          echo "Xcode projects found:"
+          find . \
+            -maxdepth 3 \
+            \( -name "*.xcodeproj" -o -name "*.xcworkspace" \) \
+            -print
 
       - name: Build Madeira
         shell: bash
         run: |
           set -euxo pipefail
 
+          PROJECT="$(find . -maxdepth 3 -name "*.xcodeproj" -print -quit)"
+
+          if [ -z "$PROJECT" ]; then
+            echo "No Xcode project found."
+            exit 1
+          fi
+
+          echo "Using project: $PROJECT"
+
           xcodebuild \
-            -project app/Madeira.xcodeproj \
-            -scheme Madeira \
+            -project "$PROJECT" \
             -configuration Release \
             -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
+            -destination "generic/platform=iOS" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             build
 
-      - name: Locate application bundle
+      - name: Locate Madeira.app
+        id: find-app
         shell: bash
         run: |
           set -euxo pipefail
 
-          find . \
-            -type d \
-            -name "*.app" \
-            -not -path "./.git/*" \
-            -print
-
-      - name: Package application
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          APP_PATH="$(find ~/Library/Developer/Xcode/DerivedData \
-            -type d \
-            -path "*/Build/Products/Release-iphoneos/*.app" \
-            -print -quit)"
+          APP_PATH="$(
+            find "$HOME/Library/Developer/Xcode/DerivedData" \
+              -type d \
+              -path "*/Build/Products/Release-iphoneos/*.app" \
+              -print \
+              -quit
+          )"
 
           if [ -z "$APP_PATH" ]; then
             echo "Could not find the built .app bundle."
             exit 1
           fi
 
+          echo "Found application:"
+          echo "$APP_PATH"
+
+          echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Package application
+        shell: bash
+        run: |
+          set -euxo pipefail
+
           mkdir -p artifacts
-          ditto "$APP_PATH" "artifacts/Madeira.app"
+
+          cp -R \
+            "${{ steps.find-app.outputs.app_path }}" \
+            "artifacts/Madeira.app"
 
           cd artifacts
-          zip -r Madeira-ios.zip Madeira.app
 
-      - name: Upload build artifact
+          zip \
+            -r \
+            "Madeira-ios.zip" \
+            "Madeira.app"
+
+      - name: Upload application
         uses: actions/upload-artifact@v6
         with:
-          name: Madeira-ios
+          name: Madeira-iOS
           path: artifacts/Madeira-ios.zip
           if-no-files-found: error
