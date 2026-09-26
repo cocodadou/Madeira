@@ -283,6 +283,50 @@ jobs:
             ln -sfn "${header}" "${WINE_NTDLL_UNIX}/${name}"
           done
 
+      - name: Prepare wineserver Madeira headers
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # L'erreur "ios_fastsync.h: No such file or directory" apparaissait
+          # pendant "../configure" lui-meme (config.status executant
+          # tools/makedep pour generer les dependances de wine/server/),
+          # donc AVANT que "make" ne demarre. Le header Madeira doit donc
+          # etre lie dans wine/server/ ici, avant l'etape "Configure Wine" --
+          # pas seulement avant de compiler libwineserver.a.
+          #
+          # On ne devine pas le chemin source (le depot n'a pas ete
+          # inspecte directement) : on cherche le fichier dans tout le
+          # checkout et on echoue explicitement s'il est introuvable,
+          # plutot que de laisser configure produire une erreur cryptique.
+
+          IOS_FASTSYNC_PATH="$(
+            find "${GITHUB_WORKSPACE}" \
+              -not -path '*/.git/*' \
+              -iname 'ios_fastsync.h' \
+              -print \
+              -quit
+          )"
+
+          if [ -z "${IOS_FASTSYNC_PATH}" ]; then
+            echo "::error::ios_fastsync.h introuvable dans le checkout (wine submodule @ 932a390d9cb8d035cb4cac7ed8f8fdbb3987c841, fork cocodadou/Madeira <- 125hz/Madeira). Ce fork ne contient probablement pas ce header specifique a Madeira pour wine/server/. Verifiez que le submodule 'wine' pointe vers un commit qui l'inclut (comparer avec upstream willfaust/wine), ou que ce fork est bien synchronise avec willfaust/Madeira."
+            exit 1
+          fi
+
+          echo "ios_fastsync.h trouve : ${IOS_FASTSYNC_PATH}"
+
+          SHIMS_SRC_DIR="$(dirname "${IOS_FASTSYNC_PATH}")"
+          WINE_SERVER="${GITHUB_WORKSPACE}/wine/server"
+
+          test -d "${WINE_SERVER}"
+
+          for header in "${SHIMS_SRC_DIR}"/*.h; do
+            name="$(basename "${header}")"
+            ln -sfn "${header}" "${WINE_SERVER}/${name}"
+          done
+
+          test -e "${WINE_SERVER}/ios_fastsync.h"
+
       - name: Verify native macOS compiler
         shell: bash
         run: |
