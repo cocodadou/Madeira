@@ -58,6 +58,9 @@ jobs:
             cmake \
             flex \
             gettext \
+            gst-plugins-base \
+            gstreamer \
+            harfbuzz \
             libtool \
             llvm \
             meson \
