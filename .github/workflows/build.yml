@@ -412,11 +412,18 @@ jobs:
           # "Build wineserver iOS layer" (build/wineserver/build.sh) plus
           # bas. La construire ici, avant cette préparation, provoque
           # l'échec "ios_fastsync.h: No such file or directory".
+          # NOTE: la cible est "dlls/d3dcompiler_47" (le dossier du module),
+          # pas "dlls/d3dcompiler_47/d3dcompiler_47.dll" : avec
+          # --enable-win64 --with-mingw, le Makefile genere par Wine ne
+          # definit pas toujours le fichier .dll comme cible make directe ;
+          # cibler le dossier laisse le Makefile du module choisir le bon
+          # artefact interne (cibler directement le .dll donnait
+          # "No rule to make target ... .dll").
           make -j"$(sysctl -n hw.ncpu)" \
             tools/makedep \
             tools/winebuild/winebuild \
             tools/winegcc/winegcc \
-            dlls/d3dcompiler_47/d3dcompiler_47.dll \
+            dlls/d3dcompiler_47 \
             wine
 
       - name: Build ntdll Unix iOS layer
