@@ -25,7 +25,6 @@ jobs:
 
       LLVM_MINGW_VERSION: "20260421"
       LLVM_MINGW_NAME: "llvm-mingw-20260421-ucrt-macos-universal"
-
       GMP_VERSION: "6.3.0"
       NETTLE_VERSION: "3.10.1"
       GNUTLS_VERSION: "3.8.9"
@@ -44,10 +43,7 @@ jobs:
 
           sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
 
-          echo "Xcode:"
           xcodebuild -version
-
-          echo "iPhoneOS SDK:"
           xcrun --sdk iphoneos --show-sdk-path
 
       - name: Install build dependencies
@@ -137,10 +133,6 @@ jobs:
           set -euo pipefail
 
           TOOLCHAIN_DIR="${GITHUB_WORKSPACE}/toolchains/${LLVM_MINGW_NAME}"
-          BREW_LLVM_PREFIX="$(brew --prefix llvm)"
-
-          echo "TOOLCHAIN_DIR=${TOOLCHAIN_DIR}"
-          echo "BREW_LLVM_PREFIX=${BREW_LLVM_PREFIX}"
 
           export PATH="\
           ${BISON_BIN}:\
@@ -152,29 +144,15 @@ jobs:
 
           echo "PATH=${PATH}" >> "${GITHUB_ENV}"
 
-          echo "Bison:"
           bison --version
-
-          echo "Flex:"
           flex --version
-
-          echo "msgfmt:"
           msgfmt --version
 
-          echo "Native Apple Clang:"
           xcrun clang --version
-
-          echo "Homebrew LLVM:"
           "${LLVM_BIN}/clang" --version
 
-          echo "LLVM-MinGW:"
           "${TOOLCHAIN_DIR}/bin/aarch64-w64-mingw32-clang" --version
           "${TOOLCHAIN_DIR}/bin/x86_64-w64-mingw32-clang" --version
-
-          echo "LLVM-MinGW dlltool:"
-          "${TOOLCHAIN_DIR}/bin/llvm-dlltool" --help >/dev/null 2>&1 || true
-
-          echo "LLVM-MinGW LLD:"
           "${TOOLCHAIN_DIR}/bin/ld.lld" --version
 
       - name: Prepare LLVM headers for DXMT
@@ -207,14 +185,6 @@ jobs:
 
           test -d \
             "${GITHUB_WORKSPACE}/toolchains/llvm-ios-build/include/llvm"
-
-          echo "DXMT LLVM source headers:"
-          ls -ld \
-            "${GITHUB_WORKSPACE}/toolchains/llvm-project/llvm/include"
-
-          echo "DXMT LLVM generated headers:"
-          ls -ld \
-            "${GITHUB_WORKSPACE}/toolchains/llvm-ios-build/include"
 
       - name: Prepare FreeType source
         shell: bash
@@ -313,10 +283,31 @@ jobs:
             ln -sfn "${header}" "${WINE_NTDLL_UNIX}/${name}"
           done
 
-          echo "Wine-local Madeira headers:"
-          ls -l \
-            "${WINE_NTDLL_UNIX}"/ios_*.h \
-            "${WINE_NTDLL_UNIX}/wine_ios_exit.h" 2>/dev/null || true
+      - name: Verify native macOS compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+          TEST_DIR="${RUNNER_TEMP}/clang-test"
+
+          rm -rf "${TEST_DIR}"
+          mkdir -p "${TEST_DIR}"
+
+          cat > "${TEST_DIR}/main.c" <<'EOF'
+          int main(void)
+          {
+              return 0;
+          }
+          EOF
+
+          "${LLVM_BIN}/clang" \
+            -isysroot "${SDKROOT}" \
+            "${TEST_DIR}/main.c" \
+            -o "${TEST_DIR}/test"
+
+          file "${TEST_DIR}/test"
+          test -x "${TEST_DIR}/test"
 
       - name: Configure Wine
         shell: bash
@@ -324,6 +315,7 @@ jobs:
           set -euo pipefail
 
           TOOLCHAIN_DIR="${GITHUB_WORKSPACE}/toolchains/${LLVM_MINGW_NAME}"
+          SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
 
           export PATH="\
           ${BISON_BIN}:\
@@ -333,6 +325,8 @@ jobs:
           ${TOOLCHAIN_DIR}/bin:\
           ${PATH}"
 
+          export SDKROOT
+
           rm -rf wine/build-macos
           mkdir -p wine/build-macos
 
@@ -341,12 +335,12 @@ jobs:
           ../configure \
             --enable-win64 \
             --with-mingw \
-            CC="$(xcrun -f clang)" \
-            CXX="$(xcrun -f clang++)" \
-            AR="$(xcrun -sdk macosx -f ar)" \
-            RANLIB="$(xcrun -sdk macosx -f ranlib)" \
-            STRIP="$(xcrun -sdk macosx -f strip)" \
-            DLLTOOL="${TOOLCHAIN_DIR}/bin/llvm-dlltool"
+            CC="${LLVM_BIN}/clang" \
+            CXX="${LLVM_BIN}/clang++" \
+            AR="${LLVM_BIN}/llvm-ar" \
+            RANLIB="${LLVM_BIN}/llvm-ranlib" \
+            STRIP="${LLVM_BIN}/llvm-strip" \
+            DLLTOOL="${LLVM_BIN}/llvm-dlltool"
 
           test -f Makefile
           test -f include/config.h
